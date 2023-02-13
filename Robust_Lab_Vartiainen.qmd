@@ -1,0 +1,348 @@
+---
+title: "Robust Methods Lab"
+format: html
+editor: visual
+execute: 
+  message: false
+  warning: false
+  echo: true
+---
+
+# Lab 1-Robust Methods
+
+## Instructions
+
+-   If you are fitting a model, display the model output in a neatly formatted table. (The `gt` `tidy` and `kable` functions can help!)
+
+-   If you are creating a plot, use `ggplot` or `base`and make sure they are publication ready. That means there are clear labels for all axes, titles, etc.
+
+-   Commit and push your work to GitHub regularly, at least after each exercise. Write short and informative commit messages.
+
+-   When you're done, we should be able to knit the final version of the QMD in your GitHub as a HTML.
+
+    ```{r}
+    #| message: false
+    #| 
+    library(tidyverse)
+    library(robustbase) # star data
+    library(boot) # bootstrapping
+    library(correlation) # get different correlations
+    library(permuco) # run permutation tests
+    library(parameters) # SE
+    library(data.table) # fread 
+    library(infer) # sample_rep_n function
+    library(palmerpenguins) # penguins dataset
+    library(datawizard)
+    library(estimatr)
+    library(performance)
+
+
+    ```
+
+## Robust Correlations
+
+Use the `stars` data in `robustbase`. This data looks at the relationship between temperature at the surface of a star and the light intensity.
+
+1.  
+
+    ```{r}
+    stars<-robustbase::starsCYG
+    ```
+
+    a\. Plot the data and describe the pattern seen. What is Pearson's *r*?\
+    \
+    The upper temperature values seem to be positively correlated with light intensity, but there's extreme values in the lower values. The pearson r is negative, r = -.21.
+
+    ```{r}
+    ggplot(stars, aes(x=log.Te, y=log.light)) + geom_point()
+    cor(x=stars$log.Te, y=stars$log.light, method = "pearson")
+
+    ```
+
+    b\. Re-run the correlation, but this time use the winsorized r (20%). Do this manually and then with the correlation::correlation function from `easystats`.
+
+    ```{r}
+    #before windsorization
+    hist(stars$log.Te)
+    hist(stars$log.light)
+
+    # after windsorization
+    hist(winsorize(stars$log.Te, threshold = 0.2), main = "20% Winsorization, temperature")
+
+    stars <- stars %>% 
+      mutate(wins_Te = winsorize(log.Te))
+    correlation::correlation(stars)
+    ```
+
+    c\. Compare the correlations.
+
+    The p-values did not change significantly, but windsorization flipped the direction of the correlation from negative to positive.
+
+    ```{r}
+    ```
+
+## Bootstrapping and Permutations
+
+2.  For the following data: \[8.453532, 10.025041, 11.495339, 9.367600, 8.333229, 9.788753, 10.883344, 10.543059, 9.869095, 10.799819\]
+
+    a\. Bootstrap the mean (using the `boot` package) and plot the histogram with `ggplot2`
+
+    ```{r}
+    values<-c(8.453532, 10.025041, 11.495339, 9.367600, 8.333229, 9.788753, 10.883344, 10.543059, 9.869095, 10.799819)
+    boot_samp <- sample(values, replace = TRUE) # sample with replacement
+    hist(boot_samp, main = "Bootstrapped values")
+    ```
+
+    b\. Bootstrap the median (using the `boot` package) and plot the histogram with `ggplot2`
+
+    ```{r}
+    median_fun = function(values, indices) {
+      return(median(values[indices])) #indices to do bootstrapping
+    }
+    results_median = boot(values, median_fun, R=1000)
+    medians=results_median$t
+    hist(medians, main = "Bootstrapped medians")
+    ```
+
+    c\. For the mean bootstraps, plot the 95% confidence intervals (percentile and bca) ) along with the mean. Use `geom_vline annotate` to mark the lines noting what they represent.
+
+    ```{r}
+    results_mean = boot(values, median_fun, R=1000)
+    means=results_mean$t
+    results_ci_mean = boot.ci(results_mean, type = "perc", R=1000)
+    results_ci_bca_mean = boot.ci(results_mean, type = "bca", R=1000)
+
+    lines_mean <- c(results_ci_mean$percent[4], results_ci_mean$percent[5], results_ci_bca_mean$bca[4], results_ci_bca_mean$bca[5])
+    df_mean <- as.data.frame(means)
+    ggplot(df_mean, aes(x = V1)) + 
+      geom_histogram() +
+      geom_vline(xintercept = lines_mean, linetype = "dashed") +
+      annotate("text", x=results_ci_mean$percent[4], y=100, label="95 % CI, lower", angle=90, vjust = -1.5) +
+      annotate("text", x=results_ci_mean$percent[5], y=100, label="95 % CI, upper", angle=90, vjust = -1.5)
+
+    ```
+
+    d\. For the median bootstraps, plot the 95% confidence intervals (Percentile and BCa). Use `geom_vline and annotate` to mark the lines noting what they represent.
+
+    ```{r}
+    results_ci = boot.ci(results_median, type = "perc", R=1000)
+    results_ci_bca = boot.ci(results_median, type = "bca", R=1000)
+
+    lines <- c(results_ci$percent[4], results_ci$percent[5], results_ci_bca$bca[4], results_ci_bca$bca[5])
+    df <- as.data.frame(medians)
+    ggplot(df, aes(x = V1)) + 
+      geom_histogram() +
+      geom_vline(xintercept = lines, linetype = "dashed") +
+      annotate("text", x=results_ci$percent[4], y=100, label="95 % CI, lower", angle=90, vjust = -1.5) +
+      annotate("text", x=results_ci$percent[5], y=100, label="95 % CI, upper", angle=90, vjust = -1.5)
+    ```
+
+3.  You want to test whether the following paired samples are significantly different from one another: pre = \[22,25,17,24,16,29,20,23,19,20\], post = \[18,21,16,22,19,24,17,21,23,18\]. Often researchers would run a paired sampled t-test, but you are concerned the data does not follow a normal distribution.
+
+    a.  Calculate the paired differences, that is post - pre, which will result in a vector of paired differences (pdiff0 = post - pre)
+
+    ```{r}
+    prepost <- data.frame(pre = c(22,25,17,24,16,29,20,23,19,20), post = c(18,21,16,22,19,24,17,21,23,18))
+    pdiff0 <- c(prepost$post - prepost$pre)
+    ```
+
+    b\. Calculate the mean of the paired differences (Xpdiff0)
+
+    ```{r}
+    Xpdiff0 <- mean(pdiff0)
+    ```
+
+    d\. Bootstrap b) with replacement (pdiff1) and plot the histogram with `ggplot2`.
+
+    ```{r}
+    mean_fun = function(pdiff0, indices) {
+      return(mean(pdiff0[indices])) #indices to do bootstrapping
+    }
+    pdiff1 = boot(pdiff0, mean_fun, R=1000)
+    mean_prepost <- as.data.frame(pdiff1$t)
+    ggplot(mean_prepost, aes(x = V1)) + 
+      geom_histogram()
+
+    ```
+
+    e\. Calculate the 95% confidence intervals (BCa). What can you infer from this?
+
+    ```{r}
+    prepost_ci_bca = boot.ci(pdiff1, type = "bca", R=1000)
+    prepost_ci_bca
+
+    ```
+
+    f\. Plot bootstrap mean along with 95% CIs (with `ggplot2`). Use annotate to note what the vertical lines represent.
+
+    ```{r}
+    mean_CIs <- c(Xpdiff0, prepost_ci_bca$bca[4],prepost_ci_bca$bca[5])
+    ggplot(mean_prepost, aes(x = V1)) + 
+      geom_histogram() +
+      geom_vline(xintercept = mean_CIs, linetype = "dashed") +
+      annotate("text", x=prepost_ci_bca$bca[4], y=75, label="95 % CI, lower", angle=90, vjust = 1.5) +
+      annotate("text", x=prepost_ci_bca$bca[5], y=75, label="95 % CI, upper", angle=90, vjust = 1.5) +
+      annotate("text", x=Xpdiff0, y=75, label="Mean", angle=90, vjust = 1.5)
+    ```
+
+4.  Pepper Joe measured the length and heat of 85 chili peppers. He wants to know if smaller peppers are hotter than longer peppers.
+
+    ```{r}
+    #read data.table to read in
+    chili<- read.delim("https://raw.githubusercontent.com/jgeller112/psy504-advanced-stats/main/slides/03-Robust_Methods/data/chillis.csv")
+    ```
+
+5.  Some species display sexual size dimorphism -- in which one sex is on average larger than the other. Such a pattern can tell us about the species' ecology and mating habits. Do penguins display this sex difference in size? Let's just look at a subset of the palmerpenguins data set, which we'll call `my_penguins`.
+
+    ```{r}
+    my_penguins <- penguins %>% 
+      filter(species == "Adelie",
+             !is.na(sex), 
+             island == "Torgersen") 
+    my_penguins
+    ```
+
+a\. Visualize body size by sex
+
+```{r}
+ggplot(my_penguins, aes(sex, body_mass_g, fill=sex)) +
+geom_boxplot()+geom_point()
+```
+
+b\. Calculate the original mean difference between sex\
+
+```{r}
+mean_diff <- my_penguins %>% 
+  group_by(sex) %>%
+  summarise(mean_group = mean(body_mass_g)) %>%
+  summarise(mean_diff=diff(mean_group))
+
+```
+
+c\. Permute the group labels (10000x)
+
+```{r}
+sample_size <- nrow(my_penguins)
+perm_reps   <- 10000 
+many.perm <- my_penguins    %>%
+  rep_sample_n(size = sample_size, replace = FALSE, reps = perm_reps) %>% 
+  mutate(perm_sex = sample(sex, size = n(), replace = FALSE))  %>%
+  group_by(replicate, perm_sex)
+many.perm
+```
+
+d\. Plot the null-hypothesis distribution (NHD) for the difference
+
+```{r}
+many.perm.means <- many.perm %>%
+  summarise(mean_group = mean(body_mass_g), .groups = "drop")%>%
+  group_by(replicate)
+many.perm.means
+many.perm.diffs <- many.perm.means %>%
+  summarise(diff_value = diff(mean_group))
+ggplot(many.perm.diffs, aes(x = diff_value)) +
+  geom_histogram(bins = 32, color = "white")
+
+
+df_diff  <- my_penguins          %>% 
+  specify(body_mass_g ~ sex) %>%
+  calculate(stat = "diff in means")
+  null_distn  <- my_penguins   %>% 
+  specify(body_mass_g ~ sex) %>%
+   hypothesize(null = "independence") %>%
+   generate(reps = 10000, type = "permute") %>%
+   calculate(stat = "diff in means")
+  null_distn %>%
+  visualize() +shade_p_value(obs_stat = df_diff, direction = "two-sided")
+```
+
+e\. Compare the observed mean difference to the NHD (is *p* \< .05?)
+
+Yes!
+
+```{r}
+many.perm.diffs_1 <- many.perm.diffs %>% 
+  mutate(abs_obs_dif = abs(pull(mean_diff)),
+         abs_perm_dif = abs(diff_value),
+         as_or_more_extreme = abs_perm_dif >= abs_obs_dif) 
+mean(many.perm.diffs_1$as_or_more_extreme)
+
+
+```
+
+6.  Suppose a replication experiment was conducted to further examine the interaction effect between driving difficulty and conversation difficulty on driving errors in a driving simulator. In the replication, the researchers administered the same three levels of conversation difficulty; (1) control, (2) easy, (3) difficult (C, E, D) but assume that they added a third level of driving difficulty; (1) low, (2) moderate, (3) difficult (L, M, D). Assume the design was completely between subjects and conduct a factorial ANOVA to test the main effects of conversation and driving difficulty as well as the interaction effect. The DV is the number of errors committed in the driving simulator.
+
+    ```{r}
+    library(tidyverse)
+    fac_data<-read_csv("https://raw.githubusercontent.com/jgeller112/psy503-psych_stats/master/static/assignment/data/fact_final.csv")
+
+    ```
+
+    a\. Run a permutation test (ANOVA)
+
+    ```{r}
+    anova_perm <- aovperm(errors ~ convo + drive, data = fac_data, np = 10000)
+    anova_perm
+
+    ```
+
+    b\. How would you follow-up significant effects in this context?
+
+    ```{r}
+
+    ```
+
+## Robust Linear Models
+
+7.  Suppose we have the following data frame in R that contains information on the hours studied and exam score received by 20 students in some class:
+
+```{r}
+df <- data.frame(hours=c(1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4,
+                         4, 5, 5, 5, 6, 6, 7, 7, 8),
+                 score=c(67, 68, 74, 70, 71, 75, 80, 70, 84, 72,
+                         88, 75, 95, 75, 99, 78, 99, 65, 96, 70))
+
+```
+
+a\. Use the lm() function to fit a regression model in R that uses **hours** as the predictor variable and **score** as the response variable
+
+```{r}
+lm_model <- lm(score ~ hours, data = df)
+tidy(lm_model)
+
+```
+
+b\. Interpret the results
+
+A factorial ANOVA was performed to analyze the effect of hours studied on exam scores. A significant main effect was not observed.
+
+```{r}
+
+```
+
+c\. Check assumptions and report which assumptions are violated (include stats or plots)
+
+The homoscedasticity assumption is not met.
+
+```{r}
+lm_model%>%
+  check_model()
+check_heteroscedasticity(lm_model)
+```
+
+d\. Re-run the lm you saved above, but with robust standard errors
+
+```{r}
+
+mp <- model_parameters(lm_model, vcov = "HC3") 
+```
+
+e\. What differences do you notice between the regular regression and the regression with robust SEs applied?
+
+Coefficients remain the same, but standard errors, confidence intervals, and t- and p-values have changed.
+
+```{r}
+mp
+mo <- model_parameters(lm_model) 
+mo
+```
